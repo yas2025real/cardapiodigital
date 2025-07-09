@@ -1,0 +1,650 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cardápio Digital</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-router-dom@6/dist/umd/react-router-dom.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-storage.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth.js"></script>
+    <script type="text/javascript">
+        // Configuração do Firebase (substitua pelos seus dados)
+        const firebaseConfig = {
+            apiKey: "SUA_API_KEY",
+            projectId: "SEU_PROJETO_ID",
+            storageBucket: "SEU_PROJETO_ID.appspot.com",
+            authDomain: "SEU_PROJETO_ID.firebaseapp.com"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const storage = firebase.storage();
+        const auth = firebase.auth();
+
+        // Componente do Formulário de Configuração/Edição
+        function ConfigForm({ initialData, restaurantId }) {
+            const [restaurant, setRestaurant] = React.useState(initialData?.restaurant || {
+                name: '', logo: null, address: '', hours: '', whatsapp: '', customLink: ''
+            });
+            const [items, setItems] = React.useState(initialData?.items?.map(item => ({ ...item, image: null, imageUrl: item.image })) || []);
+            const [user, setUser] = React.useState(null);
+            const [email, setEmail] = React.useState('');
+            const [password, setPassword] = React.useState('');
+            const [whatsappCode, setWhatsappCode] = React.useState('');
+            const [authMode, setAuthMode] = React.useState('email'); // email ou whatsapp
+            const [isAuthenticated, setIsAuthenticated] = React.useState(false);
+            const [isNewUser, setIsNewUser] = React.useState(new URLSearchParams(window.location.search).get('token'));
+            const navigate = ReactRouterDOM.useNavigate();
+
+            // Verificar autenticação
+            React.useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(user => {
+                    if (user) {
+                        setUser(user);
+                        setIsAuthenticated(true);
+                    } else {
+                        setUser(null);
+                        setIsAuthenticated(false);
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // Validar token inicial
+            React.useEffect(() => {
+                if (isNewUser) {
+                    db.collection('tokens').doc(isNewUser).get()
+                        .then(doc => {
+                            if (!doc.exists) {
+                                alert('Token inválido ou expirado.');
+                                navigate('/');
+                            }
+                        });
+                }
+            }, [isNewUser]);
+
+            // Criar ou logar usuário (e-mail/senha)
+            const handleEmailAuth = async () => {
+                try {
+                    if (isNewUser) {
+                        await auth.createUserWithEmailAndPassword(email, password);
+                        await db.collection('users').doc(email).set({ restaurantId: restaurantId || '' });
+                        await db.collection('tokens').doc(isNewUser).delete();
+                        alert('Conta criada com sucesso! Configure seu cardápio.');
+                        setIsNewUser(false);
+                    } else {
+                        await auth.signInWithEmailAndPassword(email, password);
+                    }
+                } catch (error) {
+                    alert(`Erro: ${error.message}`);
+                }
+            };
+
+            // Iniciar login via WhatsApp (simulado, requer backend)
+            const handleWhatsappAuth = () => {
+                const whatsappNumber = '[SEU_NUMERO_WHATSAPP]'; // Substitua pelo seu número
+                const token = isNewUser || 'login';
+                window.open(`https://wa.me/${whatsappNumber}?text=Quero%20configurar%20meu%20cardápio&token=${token}`, '_blank');
+                alert('Envie seu número pelo WhatsApp. Você receberá um código de 6 dígitos.');
+            };
+
+            // Validar código WhatsApp (simulado, requer backend)
+            const handleWhatsappCode = async () => {
+                // Para implementar, use Firebase Cloud Functions com Twilio:
+                // 1. Gere código de 6 dígitos no backend.
+                // 2. Envie via WhatsApp usando Twilio.
+                // 3. Valide o código aqui e crie sessão com auth.signInWithCustomToken.
+                alert('Funcionalidade de WhatsApp em desenvolvimento. Use e-mail/senha por enquanto.');
+            };
+
+            // Adicionar novo item
+            const addItem = () => {
+                if (items.length >= 20) {
+                    alert('Seu plano suporta até 20 itens.');
+                    return;
+                }
+                setItems([...items, { name: '', price: '', description: '', image: null }]);
+            };
+
+            // Atualizar item
+            const updateItem = (index, field, value) => {
+                const newItems = [...items];
+                newItems[index][field] = value;
+                setItems(newItems);
+            };
+
+            // Remover item
+            const removeItem = (index) => {
+                setItems(items.filter((_, i) => i !== index));
+            };
+
+            // Fazer upload de imagem
+            const uploadImage = async (file) => {
+                if (file.size > 2 * 1024 * 1024) {
+                    throw new Error('A imagem deve ter no máximo 2MB.');
+                }
+                const storageRef = storage.ref(`images/${Date.now()}_${file.name}`);
+                await storageRef.put(file);
+                return await storageRef.getDownloadURL();
+            };
+
+            // Salvar configuração
+            const saveConfig = async () => {
+                if (!restaurant.name || !restaurant.address || !restaurant.hours || !restaurant.whatsapp || !restaurant.customLink) {
+                    alert('Preencha todas as informações do restaurante, incluindo o link personalizado.');
+                    return;
+                }
+                if (!restaurant.logo && !initialData?.restaurant.logo) {
+                    alert('Faça upload do logo do restaurante.');
+                    return;
+                }
+                if (items.length === 0) {
+                    alert('Adicione pelo menos um item ao cardápio.');
+                    return;
+                }
+                try {
+                    // Verificar se o customLink já existe
+                    const normalizedLink = restaurant.customLink.toLowerCase().replace(/\s+/g, '-').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    const existingDoc = await db.collection('restaurants').doc(normalizedLink).get();
+                    let newRestaurantId = normalizedLink;
+                    if (existingDoc.exists && !initialData) {
+                        const randomNum = Math.floor(1000 + Math.random() * 9000);
+                        newRestaurantId = `${normalizedLink}-${randomNum}`;
+                    }
+                    const logoUrl = restaurant.logo ? await uploadImage(restaurant.logo) : initialData.restaurant.logo;
+                    const itemData = [];
+                    for (const item of items) {
+                        if (!item.name || !item.price || !item.description || (!item.image && !item.imageUrl)) {
+                            alert('Preencha todos os campos de cada item.');
+                            return;
+                        }
+                        const imageUrl = item.image ? await uploadImage(item.image) : item.imageUrl;
+                        itemData.push({
+                            name: item.name,
+                            price: parseFloat(item.price),
+                            description: item.description,
+                            image: imageUrl
+                        });
+                    }
+                    await db.collection('restaurants').doc(newRestaurantId).set({
+                        restaurant: {
+                            name: restaurant.name,
+                            logo: logoUrl,
+                            address: restaurant.address,
+                            hours: restaurant.hours,
+                            whatsapp: restaurant.whatsapp,
+                            customLink: newRestaurantId
+                        },
+                        items: itemData
+                    });
+                    await db.collection('users').doc(user.email).update({ restaurantId: newRestaurantId });
+                    alert(`Cardápio salvo com sucesso! Acesse em: ${window.location.origin}/${newRestaurantId}`);
+                    navigate(`/${newRestaurantId}`);
+                } catch (error) {
+                    alert(`Erro: ${error.message}`);
+                }
+            };
+
+            if (!isAuthenticated) {
+                return (
+                    <div className="container mx-auto p-4">
+                        <h1 className="text-3xl font-bold mb-6 text-center">{isNewUser ? 'Crie Sua Conta' : 'Acesse Sua Conta'}</h1>
+                        <div className="bg-white p-4 rounded shadow">
+                            <div className="flex justify-center mb-4">
+                                <button
+                                    onClick={() => setAuthMode('email')}
+                                    className={`px-4 py-2 mr-2 ${authMode === 'email' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                                >
+                                    E-mail/Senha
+                                </button>
+                                <button
+                                    onClick={() => setAuthMode('whatsapp')}
+                                    className={`px-4 py-2 ${authMode === 'whatsapp' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
+                                >
+                                    WhatsApp
+                                </button>
+                            </div>
+                            {authMode === 'email' ? (
+                                <>
+                                    <input
+                                        type="email"
+                                        placeholder="E-mail"
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        className="w-full p-2 mb-4 border rounded"
+                                    />
+                                    <input
+                                        type="password"
+                                        placeholder="Senha"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        className="w-full p-2 mb-4 border rounded"
+                                    />
+                                    <button
+                                        onClick={handleEmailAuth}
+                                        className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                    >
+                                        {isNewUser ? 'Criar Conta' : 'Entrar'}
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <input
+                                        type="text"
+                                        placeholder="Código recebido no WhatsApp"
+                                        value={whatsappCode}
+                                        onChange={(e) => setWhatsappCode(e.target.value)}
+                                        className="w-full p-2 mb-4 border rounded"
+                                    />
+                                    <button
+                                        onClick={handleWhatsappAuth}
+                                        className="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                                    >
+                                        Solicitar Código via WhatsApp
+                                    </button>
+                                    <button
+                                        onClick={handleWhatsappCode}
+                                        className="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mt-2"
+                                    >
+                                        Validar Código
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="container mx-auto p-4">
+                    <h1 className="text-3xl font-bold mb-6 text-center">{initialData ? 'Editar Cardápio' : 'Configurar Seu Cardápio'}</h1>
+                    <div className="bg-white p-4 rounded shadow mb-6">
+                        <h2 className="text-xl font-bold mb-4">Informações do Restaurante</h2>
+                        <input
+                            type="text"
+                            placeholder="Nome do restaurante"
+                            value={restaurant.name}
+                            onChange={(e) => setRestaurant({...restaurant, name: e.target.value})}
+                            className="input"
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="Link personalizado (ex.: pizza-do-joao)"
+                            value={restaurant.customLink}
+                            onChange={(e) => setRestaurant({...restaurant, customLink: e.target.value})}
+                            className="input"
+                            required
+                        />
+                        <p className="text-sm text-gray-600 mb-2">Logo do restaurante (máx. 2MB)</p>
+                        <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => setRestaurant({...restaurant, logo: e.target.files[0]})}
+                            className="w-full p-2 mb-4 border rounded"
+                        />
+                        {initialData?.restaurant.logo && !restaurant.logo && (
+                            <p className="text-sm text-gray-600">Logo atual: <img src={initialData.restaurant.logo} alt="Logo atual" className="inline h-10" /></p>
+                        )}
+                        <input
+                            type="text"
+                            placeholder="Endereço (ex.: Rua Exemplo, 123)"
+                            value={restaurant.address}
+                            onChange={(e) => setRestaurant({...restaurant, address: e.target.value})}
+                            className="input"
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="Horário (ex.: 18h às 23h)"
+                            value={restaurant.hours}
+                            onChange={(e) => setRestaurant({...restaurant, hours: e.target.value})}
+                            className="input"
+                            required
+                        />
+                        <input
+                            type="text"
+                            placeholder="WhatsApp (ex.: +5511999999999)"
+                            value={restaurant.whatsapp}
+                            onChange={(e) => setRestaurant({...restaurant, whatsapp: e.target.value})}
+                            className="input"
+                            required
+                        />
+                    </div>
+                    <div className="bg-white p-4 rounded shadow">
+                        <h2 className="text-xl font-bold mb-4">Itens do Cardápio (máximo 20)</h2>
+                        {items.map((item, index) => (
+                            <div key={index} className="border p-4 rounded mb-4 relative">
+                                <input
+                                    type="text"
+                                    placeholder="Nome do item"
+                                    value={item.name}
+                                    onChange={(e) => updateItem(index, 'name', e.target.value)}
+                                    className="w-full p-2 mb-2 border rounded"
+                                    required
+                                />
+                                <input
+                                    type="number"
+                                    placeholder="Preço (ex.: 39.90)"
+                                    step="0.01"
+                                    value={item.price}
+                                    onChange={(e) => updateItem(index, 'price', e.target.value)}
+                                    className="w-full p-2 mb-2 border rounded"
+                                    required
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="Descrição"
+                                    value={item.description}
+                                    onChange={(e) => updateItem(index, 'description', e.target.value)}
+                                    className="w-full p-2 mb-2 border rounded"
+                                    required
+                                />
+                                <p className="text-sm text-gray-600 mb-2">Imagem do item (máx. 2MB)</p>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => updateItem(index, 'image', e.target.files[0])}
+                                    className="w-full p-2 mb-2 border rounded"
+                                />
+                                {item.imageUrl && !item.image && (
+                                    <p className="text-sm text-gray-600">Imagem atual: <img src={item.imageUrl} alt="Item atual" className="inline h-10" /></p>
+                                )}
+                                <button
+                                    onClick={() => removeItem(index)}
+                                    className="absolute top-2 right-2 text-red-500 hover:text-red-700"
+                                >
+                                    🗑️
+                                </button>
+                            </div>
+                        ))}
+                        <button
+                            onClick={addItem}
+                            className="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                        >
+                            Adicionar Item
+                        </button>
+                        {items.length >= 20 && (
+                            <p className="text-red-500 text-sm mt-2">Seu plano suporta até 20 itens.</p>
+                        )}
+                    </div>
+                    <button
+                        onClick={saveConfig}
+                        className="mt-6 w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+                    >
+                        Salvar Cardápio
+                    </button>
+                </div>
+            );
+        }
+
+        // Componente do Cardápio Digital
+        function MenuCardapio() {
+            const { id } = ReactRouterDOM.useParams();
+            const [restaurantData, setRestaurantData] = React.useState(null);
+            const [cart, setCart] = React.useState([]);
+            const [customerAddress, setCustomerAddress] = React.useState('');
+            const [paymentMethod, setPaymentMethod] = React.useState('');
+            const [changeAmount, setChangeAmount] = React.useState('');
+            const [observations, setObservations] = React.useState('');
+            const [errors, setErrors] = React.useState({});
+            const [isAdmin, setIsAdmin] = React.useState(false);
+            const navigate = ReactRouterDOM.useNavigate();
+
+            React.useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged(async user => {
+                    if (user) {
+                        const userDoc = await db.collection('users').doc(user.email).get();
+                        if (userDoc.exists && userDoc.data().restaurantId === id) {
+                            setIsAdmin(true);
+                        }
+                    }
+                    db.collection('restaurants').doc(id).get()
+                        .then(doc => {
+                            if (doc.exists) {
+                                setRestaurantData(doc.data());
+                            } else {
+                                alert('Cardápio não encontrado.');
+                            }
+                        })
+                        .catch(error => console.error('Erro ao carregar cardápio:', error));
+                });
+                return () => unsubscribe();
+            }, [id]);
+
+            const addToCart = (name, price) => {
+                setCart([...cart, { name, price }]);
+                validateForm();
+            };
+
+            const updateCartSummary = () => {
+                const itemCounts = {};
+                cart.forEach(item => {
+                    itemCounts[item.name] = (itemCounts[item.name] || 0) + 1;
+                });
+                return {
+                    items: Object.entries(itemCounts).map(([name, count]) => {
+                        const item = cart.find(i => i.name === name);
+                        return { name, count, total: count * item.price };
+                    }),
+                    total: cart.reduce((sum, item) => sum + item.price, 0)
+                };
+            };
+
+            const toggleChangeField = () => {
+                setErrors({...errors, change: ''});
+            };
+
+            const validateForm = () => {
+                const newErrors = {
+                    address: !customerAddress ? true : false,
+                    payment: !paymentMethod ? true : false,
+                    change: paymentMethod === 'Dinheiro' && !changeAmount ? true : false
+                };
+                setErrors(newErrors);
+                return cart.length > 0 && !newErrors.address && !newErrors.payment && !newErrors.change;
+            };
+
+            const sendOrder = () => {
+                if (!validateForm()) {
+                    alert('Preencha todos os campos obrigatórios.');
+                    return;
+                }
+                const { items: summaryItems, total } = updateCartSummary();
+                let message = `*Novo Pedido*\n\n*Itens:*\n`;
+                summaryItems.forEach(item => {
+                    message += `- ${item.count}x ${item.name} - R$ ${item.total.toFixed(2)}\n`;
+                });
+                if (observations) {
+                    message += `\n*Observações:* ${observations}\n`;
+                }
+                message += `\n*Total:* R$ ${total.toFixed(2)}\n`;
+                message += `*Endereço:* ${customerAddress}\n`;
+                message += `*Forma de Pagamento:* ${paymentMethod}${paymentMethod === 'Dinheiro' ? ` (Troco para R$ ${changeAmount})` : ''}\n`;
+
+                const whatsappNumber = restaurantData.restaurant.whatsapp.replace(/\D/g, '');
+                const encodedMessage = encodeURIComponent(message);
+                window.open(`https://wa.me/${whatsappNumber}?text=${encodedMessage}`, '_blank');
+                alert('Seu pedido foi preparado para envio!');
+
+                setCart([]);
+                setCustomerAddress('');
+                setPaymentMethod('');
+                setChangeAmount('');
+                setObservations('');
+                setErrors({});
+            };
+
+            if (!restaurantData) return <div className="text-center p-4">Carregando...</div>;
+
+            const { items: summaryItems, total } = updateCartSummary();
+
+            return (
+                <div className="container mx-auto p-4">
+                    {isAdmin && (
+                        <button
+                            onClick={() => navigate(`/configurar/${id}`)}
+                            className="fixed top-4 right-4 text-2xl text-gray-600 hover:text-gray-800"
+                            title="Editar Cardápio"
+                        >
+                            ⋮
+                        </button>
+                    )}
+                    <header className="text-center mb-6">
+                        <img src={restaurantData.restaurant.logo} alt="Logo" className="mx-auto h-24" />
+                        <h1 className="text-3xl font-bold mt-2">{restaurantData.restaurant.name}</h1>
+                    </header>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                        {restaurantData.items.map((item, index) => (
+                            <div key={index} className="bg-white p-4 rounded shadow">
+                                <img src={item.image} alt={item.name} className="w-full h-40 object-cover rounded" />
+                                <h2 className="text-xl font-bold mt-2">{item.name}</h2>
+                                <p className="text-gray-600">{item.description}</p>
+                                <p className="text-lg font-semibold mt-2">R$ ${item.price.toFixed(2)}</p>
+                                <button
+                                    onClick={() => addToCart(item.name, item.price)}
+                                    className="mt-2 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                >
+                                    Adicionar ao Pedido
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="bg-white p-4 rounded shadow mb-8">
+                        <h2 className="text-xl font-bold mb-4">Seu Pedido</h2>
+                        <ul className="mb-4">
+                            {summaryItems.map((item, index) => (
+                                <li key={index}>{item.count}x {item.name} - R$ ${item.total.toFixed(2)}</li>
+                            ))}
+                        </ul>
+                        <p className="text-lg font-semibold">Total: R$ ${total.toFixed(2)}</p>
+                    </div>
+                    <div className="bg-white p-4 rounded shadow mb-8">
+                        <h2 className="text-xl font-bold mb-4">Finalizar Pedido</h2>
+                        <input
+                            type="text"
+                            placeholder="Seu endereço"
+                            value={customerAddress}
+                            onChange={(e) => { setCustomerAddress(e.target.value); validateForm(); }}
+                            className="w-full p-2 mb-2 border rounded"
+                        />
+                        {errors.address && <p className="text-red-500 text-sm">Preencha o endereço</p>}
+                        <input
+                            type="text"
+                            placeholder="Observações (ex.: sem cebola)"
+                            value={observations}
+                            onChange={(e) => setObservations(e.target.value)}
+                            className="w-full p-2 mb-2 border rounded"
+                        />
+                        <select
+                            value={paymentMethod}
+                            onChange={(e) => { setPaymentMethod(e.target.value); toggleChangeField(); validateForm(); }}
+                            className="w-full p-2 mb-2 border rounded"
+                        >
+                            <option value="" disabled>Forma de pagamento</option>
+                            <option value="Pix">Pix</option>
+                            <option value="Cartão">Cartão</option>
+                            <option value="Dinheiro">Dinheiro</option>
+                        </select>
+                        {errors.payment && <p className="text-red-500 text-sm">Insira a forma de pagamento</p>}
+                        {paymentMethod === 'Dinheiro' && (
+                            <>
+                                <input
+                                    type="text"
+                                    placeholder="Troco para quanto? (ex.: 100)"
+                                    value={changeAmount}
+                                    onChange={(e) => { setChangeAmount(e.target.value); validateForm(); }}
+                                    className="w-full p-2 mb-2 border rounded"
+                                />
+                                {errors.change && <p className="text-red-500 text-sm">Informe o valor do troco</p>}
+                            </>
+                        )}
+                        <button
+                            onClick={sendOrder}
+                            disabled={!validateForm()}
+                            className={`w-full bg-green-500 text-white px-4 py-2 rounded ${!validateForm() ? 'opacity-50 cursor-not-allowed' : 'hover:bg-green-600'}`}
+                        >
+                            Enviar Pedido via WhatsApp
+                        </button>
+                    </div>
+                    <footer className="text-center text-gray-600">
+                        <p>{restaurantData.restaurant.address} | Horário: {restaurantData.restaurant.hours} | WhatsApp: {restaurantData.restaurant.whatsapp}</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        // Aplicativo principal
+        function App() {
+            return (
+                <ReactRouterDOM.BrowserRouter>
+                    <ReactRouterDOM.Routes>
+                        <ReactRouterDOM.Route path="/configurar" element={<ConfigForm />} />
+                        <ReactRouterDOM.Route path="/configurar/:id" element={<ConfigForm />} />
+                        <ReactRouterDOM.Route path="/:id" element={<MenuCardapio />} />
+                        <ReactRouterDOM.Route path="/" element={<div className="text-center p-4">Bem-vindo! Acesse seu cardápio ou configure um novo.</div>} />
+                    </ReactRouterDOM.Routes>
+                </ReactRouterDOM.BrowserRouter>
+            );
+        }
+
+        // Renderizar
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+    <style>
+        .input {
+            width: 100%;
+            padding: 0.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+        }
+    </style>
+</body>
+</html>
